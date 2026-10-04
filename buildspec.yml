@@ -1,0 +1,15 @@
+# CodeBuild specification - runs the automated test suite on every push.
+# A failing test fails the Build stage, which fails the pipeline run.
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - pip install -r backend/requirements.txt pytest
+  build:
+    commands:
+      - echo "Running automated tests with pytest..."
+      - cd backend && python -m pytest tests -v
+      - echo "All tests passed."

@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Question 3 monitoring: SNS topic with email subscription, a CloudWatch
+  dashboard graphing ECS CPUUtilization and ALB HTTP 5xx errors, and CloudWatch
+  alarms (backend 5xx count, backend CPU) that notify the email address when
+  they enter the ALARM state. Requires the Question 2 todo-app stack running.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: todo-app
+  AlertEmail:
+    Type: String
+    Description: Email address for alarm notifications (confirm the SNS subscription email!)
+  ClusterName:
+    Type: String
+    Default: todo-app-cluster
+  FrontendServiceName:
+    Type: String
+    Default: todo-app-frontend-service
+  BackendServiceName:
+    Type: String
+    Default: todo-app-backend-service
+  AlbFullName:
+    Type: String
+    Description: >
+      The ALB's full metric name, e.g. app/todo-app-alb/b5668437fdbbb4d9.
+      Fetch with: aws elbv2 describe-load-balancers --names todo-app-alb
+      --query "LoadBalancers[0].LoadBalancerArn" --output text | cut -d/ -f2-
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AppName}-alerts'
+      DisplayName: To-Do App Alerts
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AppName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 8,
+              "properties": {
+                "title": "ECS CPUUtilization (%)",
+                "region": "${AWS::Region}", "view": "timeSeries", "period": 60, "stat": "Average",
+                "metrics": [
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ClusterName}", "ServiceName", "${BackendServiceName}", {"label": "backend"}],
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ClusterName}", "ServiceName", "${FrontendServiceName}", {"label": "frontend"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 8,
+              "properties": {
+                "title": "ALB HTTP 5xx errors (count/min)",
+                "region": "${AWS::Region}", "view": "timeSeries", "period": 60, "stat": "Sum",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${AlbFullName}", {"label": "target 5xx (app errors)"}],
+                  ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${AlbFullName}", {"label": "ELB 5xx (no healthy target)"}]
+                ]
+              }
+            }
+          ]
+        }
+
+  Backend5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-backend-5xx'
+      AlarmDescription: Fires when the ALB records 10 or more HTTP 5xx responses from targets within one minute.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref AlbFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  BackendCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-backend-cpu-high'
+      AlarmDescription: Fires when backend service average CPU exceeds 60% for two consecutive minutes.
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ClusterName
+        - Name: ServiceName
+          Value: !Ref BackendServiceName
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 60
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards/dashboard/${AppName}-dashboard'
+  AlertTopicArn:
+    Value: !Ref AlertTopic
