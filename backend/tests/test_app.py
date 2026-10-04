@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 from app import app as flask_app
 
-EXPECTED_HEALTH_STATUS = "broken"
+EXPECTED_HEALTH_STATUS = "healthy"
 
 
 @pytest.fixture
